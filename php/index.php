@@ -24,7 +24,7 @@ if (is_file($file)) {
 }
 
 const POSTS_PER_PAGE = 20;
-const UPLOAD_LIMIT = 10 * 1024 * 1024;
+const UPLOAD_LIMIT = 1000 * 2048 * 2048;
 
 // memcached session
 $memd_addr = '127.0.0.1:11211';
@@ -297,8 +297,8 @@ $app->get('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC');
-    $ps->execute();
+    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?');
+    $ps->execute([POSTS_PER_PAGE]);
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
 
