@@ -7,6 +7,8 @@ use DI\Container;
 
 require 'vendor/autoload.php';
 
+// DBのmySQLのテーブルに、インデックスを追加した
+
 $_SERVER += ['PATH_INFO' => $_SERVER['REQUEST_URI']];
 $_SERVER['SCRIPT_NAME'] = '/' . basename($_SERVER['SCRIPT_FILENAME']);
 $file = dirname(__DIR__) . '/public' . $_SERVER['REQUEST_URI'];
