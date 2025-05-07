@@ -7,6 +7,8 @@ use DI\Container;
 
 require 'vendor/autoload.php';
 
+// DBのmySQLのテーブルに、インデックスを追加した
+
 $_SERVER += ['PATH_INFO' => $_SERVER['REQUEST_URI']];
 $_SERVER['SCRIPT_NAME'] = '/' . basename($_SERVER['SCRIPT_FILENAME']);
 $file = dirname(__DIR__) . '/public' . $_SERVER['REQUEST_URI'];
@@ -130,24 +132,70 @@ $container->set('helper', function ($c) {
             $all_comments = $options['all_comments'];
 
             $posts = [];
-            foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
-                }
+            $post_ids = array_column($results, 'id');
+            if (empty($post_ids)) {
+                return $posts;
+            }
 
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
+            $in = str_repeat(`?.`, count($post_ids) -1) . `?`;
+            $query = "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN ($in) GROUP BY post_id";
+            $ps = $this->db()->prepare(($query));
+            $ps->execute(($post_ids));
+            $comment_counts = [];
+
+            //登校ごとのコメント件数
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $comment_counts[$row['post_id']] = $row['count'];
+            }
+
+            if ($all_comments) {
+                $query = "SELECT * FROM comments WHERE post_id IN ($in) ORDER BY post_id, created_at DESC";
+            } else {
+                $query = 
+                "SELECT * FROM 
+                    (SELECT *, ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC) AS rn
+                        FROM comments
+                        WHERE post_id IN ($in)
+                    ) AS t WHERE rn <= 3
+                ORDER BY post_id, created_at DESC";
+            }
+            $ps = $this->db()->prepare($query);
+            $ps->execute($post_ids);
+            $all_comments_data = $ps->fetchAll(PDO::FETCH_ASSOC);
+
+            //ユーザーのID
+            $user_ids = array_column($results, 'user_id');
+            foreach ($all_comments_data as $comment) {
+                $user_ids[] = $comment['user_id'];
+            }
+            $user_ids = array_unique($user_ids);
+
+            //ユーザー情報
+            $in_users = str_repeat('?,', count($user_ids) - 1) . '?';
+            $query = "SELECT * FROM users WHERE id IN ($in_users)";
+            $ps = $this->db()->prepare($query);
+            $ps->execute($user_ids);
+            $users = [];
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $users[$row['id']] = $row;
+            }
+
+            $comments_by_post = [];
+            foreach ($all_comments_data as $comment) {
+                $comments_by_post[$comment['post_id']][] = $comment;
+            }
+
+            foreach ($results as $post) {
+                $post['comment_count'] = $comment_counts[$post['id']] ?? 0;
+                $comments = $comments_by_post[$post['id']] ?? [];
                 foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
+                    $comment['user'] = $users[$comment['user_id']] ?? null;
                 }
                 unset($comment);
                 $post['comments'] = array_reverse($comments);
+                $post['user'] = $users[$post['user_id']] ?? null;
 
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
+                if ($post['user'] && $post['user']['del_flg'] == 0) {
                     $posts[] = $post;
                 }
                 if (count($posts) >= POSTS_PER_PAGE) {
@@ -297,8 +345,8 @@ $app->get('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC');
-    $ps->execute();
+    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?');
+    $ps->execute([POSTS_PER_PAGE]);
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
 
