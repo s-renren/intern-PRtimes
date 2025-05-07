@@ -24,7 +24,7 @@ if (is_file($file)) {
 }
 
 const POSTS_PER_PAGE = 20;
-const UPLOAD_LIMIT = 1000 * 2048 * 2048;
+const UPLOAD_LIMIT = 10 * 2048 * 2048;
 
 // memcached session
 $memd_addr = '127.0.0.1:11211';
@@ -130,24 +130,70 @@ $container->set('helper', function ($c) {
             $all_comments = $options['all_comments'];
 
             $posts = [];
-            foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
-                }
+            $post_ids = array_column($results, 'id');
+            if (empty($post_ids)) {
+                return $posts;
+            }
 
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
+            $in = str_repeat(`?.`, count($post_ids) -1) . `?`;
+            $query = "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN ($in) GROUP BY post_id";
+            $ps = $this->db()->prepare(($query));
+            $ps->execute(($post_ids));
+            $comment_counts = [];
+
+            //登校ごとのコメント件数
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $comment_counts[$row['post_id']] = $row['count'];
+            }
+
+            if ($all_comments) {
+                $query = "SELECT * FROM comments WHERE post_id IN ($in) ORDER BY post_id, created_at DESC";
+            } else {
+                $query = 
+                "SELECT * FROM 
+                    (SELECT *, ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC) AS rn
+                        FROM comments
+                        WHERE post_id IN ($in)
+                    ) AS t WHERE rn <= 3
+                ORDER BY post_id, created_at DESC";
+            }
+            $ps = $this->db()->prepare($query);
+            $ps->execute($post_ids);
+            $all_comments_data = $ps->fetchAll(PDO::FETCH_ASSOC);
+
+            //ユーザーのID
+            $user_ids = array_column($results, 'user_id');
+            foreach ($all_comments_data as $comment) {
+                $user_ids[] = $comment['user_id'];
+            }
+            $user_ids = array_unique($user_ids);
+
+            //ユーザー情報
+            $in_users = str_repeat('?,', count($user_ids) - 1) . '?';
+            $query = "SELECT * FROM users WHERE id IN ($in_users)";
+            $ps = $this->db()->prepare($query);
+            $ps->execute($user_ids);
+            $users = [];
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $users[$row['id']] = $row;
+            }
+
+            $comments_by_post = [];
+            foreach ($all_comments_data as $comment) {
+                $comments_by_post[$comment['post_id']][] = $comment;
+            }
+
+            foreach ($results as $post) {
+                $post['comment_count'] = $comment_counts[$post['id']] ?? 0;
+                $comments = $comments_by_post[$post['id']] ?? [];
                 foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
+                    $comment['user'] = $users[$comment['user_id']] ?? null;
                 }
                 unset($comment);
                 $post['comments'] = array_reverse($comments);
+                $post['user'] = $users[$post['user_id']] ?? null;
 
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
+                if ($post['user'] && $post['user']['del_flg'] == 0) {
                     $posts[] = $post;
                 }
                 if (count($posts) >= POSTS_PER_PAGE) {
