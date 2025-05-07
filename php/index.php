@@ -24,7 +24,7 @@ if (is_file($file)) {
 }
 
 const POSTS_PER_PAGE = 20;
-const UPLOAD_LIMIT = 10 * 2048 * 2048;
+const UPLOAD_LIMIT = 10 * 1024 * 1024;
 
 // memcached session
 $memd_addr = '127.0.0.1:11211';
